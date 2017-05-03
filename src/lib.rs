@@ -68,6 +68,7 @@ pub struct TextDisplay<F> where F: Deref<Target=FontTexture> {
     vertex_buffer: Option<glium::VertexBuffer<VertexFormat>>,
     index_buffer: Option<glium::IndexBuffer<u16>>,
     total_text_width: f32,
+    total_text_height: f32,
     is_empty: bool,
 }
 
@@ -300,6 +301,7 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
             vertex_buffer: None,
             index_buffer: None,
             total_text_width: 0.0,
+            total_text_height: 0.0,
             is_empty: true,
         };
 
@@ -311,6 +313,10 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
     /// Returns the width in GL units of the text.
     pub fn get_width(&self) -> f32 {
         self.total_text_width
+    }
+
+    pub fn get_height(&self) -> f32 {
+        self.total_text_height
     }
 
     /// Modifies the text on this display.
@@ -361,6 +367,13 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
             let top_coord = infos.height_over_line;
             let bottom_coord = infos.height_over_line - infos.size.1;
 
+            use std::cmp::max;
+            self.total_text_height = if bottom_coord > self.total_text_height {
+                bottom_coord
+            } else {
+                self.total_text_height
+            };
+
             // top-left vertex
             vertex_buffer_data.push(VertexFormat {
                 position: [left_coord, top_coord],
@@ -390,6 +403,7 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
 
             // going to next char
             self.total_text_width = right_coord + infos.right_padding;
+            self.total_text_height = infos.height_over_line;
         }
 
         if !vertex_buffer_data.len() != 0 {
@@ -576,6 +590,8 @@ unsafe fn build_font_image(face: freetype::FT_Face, characters_list: Vec<char>, 
         let requested_height = get_nearest_po2(current_height);
         texture_data.extend(iter::repeat(0.0).take((texture_width * (requested_height - current_height)) as usize));
     }
+
+    println!("EMP {}", em_pixels);
 
     // now our texture is finished
     // we know its final dimensions, so we can divide all the pixels values into (0,1) range
