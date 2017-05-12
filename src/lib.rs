@@ -51,6 +51,7 @@ use std::rc::Rc;
 pub struct FontTexture {
     texture: glium::texture::Texture2d,
     character_infos: Vec<(char, CharacterInfos)>,
+    em_scale: f32
 }
 
 /// Object that contains the elements shared by all `TextDisplay` objects.
@@ -69,6 +70,7 @@ pub struct TextDisplay<F> where F: Deref<Target=FontTexture> {
     index_buffer: Option<glium::IndexBuffer<u16>>,
     total_text_width: f32,
     total_text_height: f32,
+    em_scale: f32,
     is_empty: bool,
 }
 
@@ -98,6 +100,7 @@ struct TextureData {
     data: Vec<f32>,
     width: u32,
     height: u32,
+    em_scale: f32
 }
 
 impl<'a> glium::texture::Texture2dDataSource<'a> for &'a TextureData {
@@ -209,6 +212,7 @@ impl FontTexture {
         Ok(FontTexture {
             texture: texture,
             character_infos: chr_infos,
+            em_scale: texture_data.em_scale
         })
     }
 }
@@ -297,6 +301,7 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
     pub fn new(system: &TextSystem, texture: F, text: &str) -> TextDisplay<F> {
         let mut text_display = TextDisplay {
             context: system.context.clone(),
+            em_scale: texture.em_scale,
             texture: texture,
             vertex_buffer: None,
             index_buffer: None,
@@ -317,6 +322,10 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
 
     pub fn get_height(&self) -> f32 {
         self.total_text_height
+    }
+
+    pub fn get_em_scale(&self) -> f32 {
+        self.texture.em_scale
     }
 
     /// Modifies the text on this display.
@@ -591,8 +600,6 @@ unsafe fn build_font_image(face: freetype::FT_Face, characters_list: Vec<char>, 
         texture_data.extend(iter::repeat(0.0).take((texture_width * (requested_height - current_height)) as usize));
     }
 
-    println!("EMP {}", em_pixels);
-
     // now our texture is finished
     // we know its final dimensions, so we can divide all the pixels values into (0,1) range
     assert!((texture_data.len() as u32 % texture_width) == 0);
@@ -615,6 +622,7 @@ unsafe fn build_font_image(face: freetype::FT_Face, characters_list: Vec<char>, 
         data: texture_data,
         width: texture_width,
         height: texture_height as u32,
+        em_scale: em_pixels
     }, characters_infos)
 }
 
