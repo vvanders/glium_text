@@ -51,7 +51,8 @@ use std::rc::Rc;
 pub struct FontTexture {
     texture: glium::texture::Texture2d,
     character_infos: Vec<(char, CharacterInfos)>,
-    em_scale: f32
+    em_scale: f32,
+    line_height: f32
 }
 
 /// Object that contains the elements shared by all `TextDisplay` objects.
@@ -100,7 +101,8 @@ struct TextureData {
     data: Vec<f32>,
     width: u32,
     height: u32,
-    em_scale: f32
+    em_scale: f32,
+    line_height: f32
 }
 
 impl<'a> glium::texture::Texture2dDataSource<'a> for &'a TextureData {
@@ -212,7 +214,8 @@ impl FontTexture {
         Ok(FontTexture {
             texture: texture,
             character_infos: chr_infos,
-            em_scale: texture_data.em_scale
+            em_scale: texture_data.em_scale,
+            line_height: texture_data.line_height
         })
     }
 }
@@ -299,6 +302,8 @@ impl TextSystem {
 impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
     /// Builds a new text display that allows you to draw text.
     pub fn new(system: &TextSystem, texture: F, text: &str, bounds: Option<(f32, f32)>) -> TextDisplay<F> {
+        println!("VALLOG {:?}", &bounds);
+
         let mut text_display = TextDisplay {
             context: system.context.clone(),
             texture: texture,
@@ -351,40 +356,54 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
             char_info.iter().find(|&&(chr, _)| chr == character)
         }).collect::<Vec<_>>();
 
-        #[derive(Clone)]
+        #[derive(Clone,Debug)]
         struct Span {
             start: usize,
             end: usize,
             width: f32
         }
 
-        let spans = glyphs.iter().scan(Span {start: 0, end: 0, width: 0.0}, |state, &&(chr, info)| {
-            let result = match chr {
-                ' ' | '\n' | '\r' => {
-                    let result = Some(state.clone());
+        let spans = glyphs.iter()
+            .map(|c| Some(c))
+            .chain(::std::iter::once(None)) //Make a sentinel for the final value
+            .scan(Span {start: 0, end: 0, width: 0.0}, |state, value| {
+                let result = match value {
+                    Some(&&(chr, info)) => {
+                        match chr {
+                            ' ' | '\n' | '\r' => {
+                                let result = Some(state.clone());
 
-                    state.start = state.end;
-                    state.width = 0.0;
+                                state.start = state.end;
+                                state.width = 0.0;
 
-                    result
-                },
-                _ => {
-                    state.end += 1;
-                    state.width += info.size.0 + info.right_padding;
+                                result
+                            },
+                            _ => {
+                                state.width += info.size.0 + info.right_padding;
 
-                    None
-                }
-            };
+                                None
+                            }
+                        }
+                    },
+                    //If we reach the end then include the last item
+                    None => Some(state.clone())
+                };
 
-            result
-        });
+                state.end += 1;
+
+                Some(result)
+            })
+            .filter_map(|r| r);
 
         let bounds = self.bounds;
+        let em_scale = self.get_em_scale();
         let splits = spans.scan((0, 0.0), |&mut (ref mut line, ref mut current_width), span| {
             if let Some((max_width, _max_height)) = bounds {
-                if *current_width + span.width > max_width {
+                if *current_width + span.width > max_width / em_scale {
                     *line += 1;
                     *current_width = span.width;
+                } else {
+                    *current_width += span.width;
                 }
             }
 
@@ -392,65 +411,74 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
         });
 
         // iterating over the characters of the string
-        for infos in glyphs.iter().map(|info| info.1) {     // FIXME: wrong, but only thing stable
-            self.is_empty = false;
-
-            // adding the quad in the index buffer
-            {
-                let first_vertex_offset = vertex_buffer_data.len() as u16;
-                index_buffer_data.push(first_vertex_offset);
-                index_buffer_data.push(first_vertex_offset + 1);
-                index_buffer_data.push(first_vertex_offset + 2);
-                index_buffer_data.push(first_vertex_offset + 2);
-                index_buffer_data.push(first_vertex_offset + 1);
-                index_buffer_data.push(first_vertex_offset + 3);
+        let mut last_line = 0;
+        let mut width = 0.0;
+        for (line, span) in splits {
+            if last_line != line {
+                width = 0.0;
             }
 
-            //
-            self.total_text_width += infos.left_padding;
+            last_line = line;
 
-            // calculating coords
-            let left_coord = self.total_text_width;
-            let right_coord = left_coord + infos.size.0;
-            let top_coord = infos.height_over_line;
-            let bottom_coord = infos.height_over_line - infos.size.1;
+            for infos in glyphs[span.start..span.end].iter().map(|info| info.1) {
+                self.is_empty = false;
 
-            self.total_text_height = if bottom_coord > self.total_text_height {
-                bottom_coord
-            } else {
-                self.total_text_height
-            };
+                // adding the quad in the index buffer
+                {
+                    let first_vertex_offset = vertex_buffer_data.len() as u16;
+                    index_buffer_data.push(first_vertex_offset);
+                    index_buffer_data.push(first_vertex_offset + 1);
+                    index_buffer_data.push(first_vertex_offset + 2);
+                    index_buffer_data.push(first_vertex_offset + 2);
+                    index_buffer_data.push(first_vertex_offset + 1);
+                    index_buffer_data.push(first_vertex_offset + 3);
+                }
 
-            // top-left vertex
-            vertex_buffer_data.push(VertexFormat {
-                position: [left_coord, top_coord],
-                tex_coords: [infos.tex_coords.0, infos.tex_coords.1],
-            });
+                //
+                width += infos.left_padding;
 
-            // top-right vertex
-            vertex_buffer_data.push(VertexFormat {
-                position: [right_coord, top_coord],
-                tex_coords: [infos.tex_coords.0 + infos.tex_size.0, infos.tex_coords.1],
-            });
+                // calculating coords
+                let baseline = infos.height_over_line - (self.texture.line_height * line as f32);
+                let left_coord = width;
+                let right_coord = left_coord + infos.size.0;
+                let top_coord = baseline;
+                let bottom_coord = baseline - infos.size.1;
 
-            // bottom-left vertex
-            vertex_buffer_data.push(VertexFormat {
-                position: [left_coord, bottom_coord],
-                tex_coords: [infos.tex_coords.0, infos.tex_coords.1 + infos.tex_size.1],
-            });
+                // top-left vertex
+                vertex_buffer_data.push(VertexFormat {
+                    position: [left_coord, top_coord],
+                    tex_coords: [infos.tex_coords.0, infos.tex_coords.1],
+                });
 
-            // bottom-right vertex
-            vertex_buffer_data.push(VertexFormat {
-                position: [right_coord, bottom_coord],
-                tex_coords: [
-                    infos.tex_coords.0 + infos.tex_size.0,
-                    infos.tex_coords.1 + infos.tex_size.1
-                ],
-            });
+                // top-right vertex
+                vertex_buffer_data.push(VertexFormat {
+                    position: [right_coord, top_coord],
+                    tex_coords: [infos.tex_coords.0 + infos.tex_size.0, infos.tex_coords.1],
+                });
 
-            // going to next char
-            self.total_text_width = right_coord + infos.right_padding;
-            self.total_text_height = infos.height_over_line;
+                // bottom-left vertex
+                vertex_buffer_data.push(VertexFormat {
+                    position: [left_coord, bottom_coord],
+                    tex_coords: [infos.tex_coords.0, infos.tex_coords.1 + infos.tex_size.1],
+                });
+
+                // bottom-right vertex
+                vertex_buffer_data.push(VertexFormat {
+                    position: [right_coord, bottom_coord],
+                    tex_coords: [
+                        infos.tex_coords.0 + infos.tex_size.0,
+                        infos.tex_coords.1 + infos.tex_size.1
+                    ],
+                });
+
+                // going to next char
+                width = right_coord + infos.right_padding;
+                self.total_text_height = (line+1) as f32 * self.texture.line_height;
+            }
+
+            if width > self.total_text_width {
+                self.total_text_width = width;
+            }
         }
 
         if !vertex_buffer_data.len() != 0 {
@@ -655,12 +683,15 @@ unsafe fn build_font_image(face: freetype::FT_Face, characters_list: Vec<char>, 
         chr.1.height_over_line /= em_pixels;
     }
 
+    let line_height = freetype::FT_MulFix((*face).height as i64, (*(*face).size).metrics.y_scale) as f32 / 64.0;
+
     // returning
     (TextureData {
         data: texture_data,
         width: texture_width,
         height: texture_height as u32,
-        em_scale: em_pixels
+        em_scale: em_pixels,
+        line_height: line_height / em_pixels
     }, characters_infos)
 }
 
