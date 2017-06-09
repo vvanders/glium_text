@@ -68,9 +68,9 @@ pub struct TextDisplay<F> where F: Deref<Target=FontTexture> {
     texture: F,
     vertex_buffer: Option<glium::VertexBuffer<VertexFormat>>,
     index_buffer: Option<glium::IndexBuffer<u16>>,
+    bounds: Option<(f32, f32)>,
     total_text_width: f32,
     total_text_height: f32,
-    em_scale: f32,
     is_empty: bool,
 }
 
@@ -298,13 +298,13 @@ impl TextSystem {
 
 impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
     /// Builds a new text display that allows you to draw text.
-    pub fn new(system: &TextSystem, texture: F, text: &str) -> TextDisplay<F> {
+    pub fn new(system: &TextSystem, texture: F, text: &str, bounds: Option<(f32, f32)>) -> TextDisplay<F> {
         let mut text_display = TextDisplay {
             context: system.context.clone(),
-            em_scale: texture.em_scale,
             texture: texture,
             vertex_buffer: None,
             index_buffer: None,
+            bounds,
             total_text_width: 0.0,
             total_text_height: 0.0,
             is_empty: true,
@@ -320,10 +320,12 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
         self.total_text_width
     }
 
+    /// Gets total text height
     pub fn get_height(&self) -> f32 {
         self.total_text_height
     }
 
+    /// Gets total text width
     pub fn get_em_scale(&self) -> f32 {
         self.texture.em_scale
     }
@@ -344,16 +346,53 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
         let mut vertex_buffer_data = Vec::with_capacity(text.len() * 4 * 4);
         let mut index_buffer_data = Vec::with_capacity(text.len() * 6);
 
-        // iterating over the characters of the string
-        for character in text.chars() {     // FIXME: wrong, but only thing stable
-            let infos = match self.texture.character_infos
-                .iter().find(|&&(chr, _)| chr == character)
-            {
-                Some(infos) => infos,
-                None => continue        // character not found in the font, ignoring it
-            };
-            let infos = infos.1;
+        let char_info = &self.texture.character_infos;
+        let glyphs = text.chars().filter_map(|character| {
+            char_info.iter().find(|&&(chr, _)| chr == character)
+        }).collect::<Vec<_>>();
 
+        #[derive(Clone)]
+        struct Span {
+            start: usize,
+            end: usize,
+            width: f32
+        }
+
+        let spans = glyphs.iter().scan(Span {start: 0, end: 0, width: 0.0}, |state, &&(chr, info)| {
+            let result = match chr {
+                ' ' | '\n' | '\r' => {
+                    let result = Some(state.clone());
+
+                    state.start = state.end;
+                    state.width = 0.0;
+
+                    result
+                },
+                _ => {
+                    state.end += 1;
+                    state.width += info.size.0 + info.right_padding;
+
+                    None
+                }
+            };
+
+            result
+        });
+
+        let bounds = self.bounds;
+        let splits = spans.scan((0, 0.0), |&mut (ref mut line, ref mut current_width), span| {
+            if let Some((max_width, _max_height)) = bounds {
+                if *current_width + span.width > max_width {
+                    *line += 1;
+                    *current_width = span.width;
+                }
+            }
+
+            Some((*line, span))
+        });
+
+        // iterating over the characters of the string
+        for infos in glyphs.iter().map(|info| info.1) {     // FIXME: wrong, but only thing stable
             self.is_empty = false;
 
             // adding the quad in the index buffer
@@ -376,7 +415,6 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
             let top_coord = infos.height_over_line;
             let bottom_coord = infos.height_over_line - infos.size.1;
 
-            use std::cmp::max;
             self.total_text_height = if bottom_coord > self.total_text_height {
                 bottom_coord
             } else {
