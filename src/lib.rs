@@ -398,7 +398,10 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
         let splits = spans.scan((0, 0.0), |&mut (ref mut line, ref mut current_width), span| {
             if let Some((max_width, _max_height)) = bounds {
                 if *current_width + span.width > max_width / em_scale {
-                    *line += 1;
+                    //Don't link-break first item if width is too much
+                    if *current_width != 0.0 {
+                        *line += 1;
+                    }
                     *current_width = span.width;
                 } else {
                     *current_width += span.width;
@@ -675,7 +678,7 @@ unsafe fn build_font_image(face: freetype::FT_Face, characters_list: Vec<char>, 
         chr.1.height_over_line /= em_pixels;
     }
 
-    let line_height = freetype::FT_MulFix((*face).height as i64, (*(*face).size).metrics.y_scale) as f32 / 64.0;
+    let line_height = freetype::FT_MulFix((*face).height as freetype::FT_Long, (*(*face).size).metrics.y_scale) as f32 / 64.0;
 
     // returning
     (TextureData {
