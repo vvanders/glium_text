@@ -302,8 +302,6 @@ impl TextSystem {
 impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
     /// Builds a new text display that allows you to draw text.
     pub fn new(system: &TextSystem, texture: F, text: &str, bounds: Option<(f32, f32)>) -> TextDisplay<F> {
-        println!("VALLOG {:?}", &bounds);
-
         let mut text_display = TextDisplay {
             context: system.context.clone(),
             texture: texture,
@@ -379,7 +377,7 @@ impl<F> TextDisplay<F> where F: Deref<Target=FontTexture> {
                                 result
                             },
                             _ => {
-                                state.width += info.size.0 + info.right_padding;
+                                state.width += info.size.0 + info.left_padding + info.right_padding;
 
                                 None
                             }
@@ -587,7 +585,7 @@ unsafe fn build_font_image(face: freetype::FT_Face, characters_list: Vec<char>, 
     let mut rows_to_skip = 0u32;
 
     // now looping through the list of characters, filling the texture and returning the informations
-    let mut em_pixels = font_size as f32;
+    let em_pixels = (*(*face).size).metrics.x_ppem as f32;
     let mut characters_infos: Vec<(char, CharacterInfos)> = characters_list.into_iter().filter_map(|character| {
         // loading wanted glyph in the font face
         if freetype::FT_Load_Glyph(face, freetype::FT_Get_Char_Index(face, character as freetype::FT_ULong), freetype::FT_LOAD_RENDER) != 0 {
@@ -597,12 +595,6 @@ unsafe fn build_font_image(face: freetype::FT_Face, characters_list: Vec<char>, 
 
         // adding a left margin before our character to prevent artifacts
         cursor_offset.0 += MARGIN;
-
-        // computing em_pixels
-        // FIXME: this is hacky
-        if character == 'M' {
-            em_pixels = bitmap.rows as f32;
-        }
 
         // carriage return our cursor if we don't have enough room to write the next caracter
         // we add a margin to prevent artifacts
